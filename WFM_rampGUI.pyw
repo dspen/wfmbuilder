@@ -8,7 +8,7 @@ Created on June 13 2016
 v1) connect to instrument and build ch1 waveform of ramp, delay, ramp, delay, etc.
     Can vary output on/off, impedance, filter shapesample rate, and offset voltage.
 v2) Add amplitude jump during delay section, total time mode for syncing
-    added 2nd channel, sync timing via trigger (not via datapts)
+    added 2nd channel, sync timing via trigger (not via datapts). output off when switching
 @author: Daryl Spencer
 """
 
@@ -21,7 +21,7 @@ from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
-__version__ = '2.0.4'
+__version__ = '2.0.5'
 class color_QLineEdit(QLineEdit):
 
     def __init__(self):
@@ -236,6 +236,10 @@ class WFM(QMainWindow):
         name='test%s' %ch
         print('Samples=%s' %len(self.datay))
         datasend=self.datay/(max(abs(self.datay)))
+        
+        #turn off output when updating
+        self.func_write('OUTPUT%s OFF; *WAI' %self.ch.currentText())
+            
         self.func_write('FORMAT:BORDER SWAPPED') #binary data format, little endian (LSB first)
         self.func_write('SOUR%s:DATA:VOLatile:CLEar; *WAI' %self.ch.currentText())
         self.inst.write_binary_values(u'SOUR%s:DATA:ARB ' %self.ch.currentText() +name+', ', datasend, datatype='f') #https://docs.python.org/2/library/struct.html
@@ -254,6 +258,8 @@ class WFM(QMainWindow):
         if self.sync.isChecked():
             self.func_write('*WAI;SOUR%s:FUNC:ARB:SYNC' %self.ch.currentText())
         print('WFM Loaded')
+        #turn output back to correct state
+        self.outputChanged()
         
     def chChanged(self):
         self.func_write('DISP:FOCUS CH%s; *WAI' %self.ch.currentText()); print('Channel changed')
