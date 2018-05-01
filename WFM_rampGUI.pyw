@@ -5,7 +5,10 @@ Accepts voltage changes for each ramp and delay
 Can change output, termination, and filter applied to arbitrary waveform
 
 Created on June 13 2016
-
+v1) connect to instrument and build ch1 waveform of ramp, delay, ramp, delay, etc.
+    Can vary output on/off, impedance, filter shapesample rate, and offset voltage.
+v2) Add amplitude jump during delay section, total time mode for syncing
+    added 2nd channel, sync timing via trigger (not via datapts)
 @author: Daryl Spencer
 """
 
@@ -18,7 +21,29 @@ from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
-__version__ = '1.2'
+__version__ = '2.0.4'
+class color_QLineEdit(QLineEdit):
+
+    def __init__(self):
+        super(color_QLineEdit, self).__init__()
+
+        self.textChanged.connect(self.change_my_color)
+        self.returnPressed.connect(self.reset_my_color)
+        
+        self.reset_my_color()
+        
+    def change_my_color(self):
+        palette = QPalette()
+        palette.setColor(self.backgroundRole(), QColor('black'))
+        palette.setColor(self.foregroundRole(), QColor('white'))
+        self.setPalette(palette)
+        
+    def reset_my_color(self):
+        palette = QPalette()
+        palette.setColor(self.backgroundRole(), QColor('white'))
+        palette.setColor(self.foregroundRole(), QColor('black'))
+        self.setPalette(palette)
+
 class WFM(QMainWindow):
     
     def __init__(self):
@@ -26,13 +51,14 @@ class WFM(QMainWindow):
         
         self.conBool=False
         self.initUI()
-        self.textbox.setText('10 .2 50 .4')
-        self.amp.setText('1 0 0.5 0')
+        self.textbox.setText('0 0 500 0 -500');
+        self.amp.setText('0 -2.5 5 0 -5');self.amp.reset_my_color()
 
-        self.off.setText('0')
+        self.off.setText('0');self.off.reset_my_color()
         self.totalpp=0
-        self.srate.setText("1e4")
-        self.term.setText('50')
+        self.srate.setText("1e4");self.srate.reset_my_color()
+        self.term.setText('50');self.term.reset_my_color()
+        self.ttime.setText('1');self.ttime.reset_my_color()
 
     def initUI(self):      
         self.main_frame =QWidget()
@@ -46,19 +72,21 @@ class WFM(QMainWindow):
         ## Create the navigation toolbar, tied to the canvas
         self.mpl_toolbar = NavigationToolbar(self.canvas, self.main_frame)
         
-        self.textbox = QLineEdit()
-        self.amp = QLineEdit()
+        self.textbox = color_QLineEdit()
+        self.amp = color_QLineEdit()
         self.amplbl = QLabel("Total Amp: _Vpp",self)
-        self.srate = QLineEdit()
+        self.srate = color_QLineEdit()
         self.sratelbl = QLabel("SampleRate (Sa/s)",self)
-        self.off = QLineEdit()
+        self.off = color_QLineEdit()
         self.offlbl = QLabel("offset (V)",self)
         
         self.lbl = QLabel("Alt. ramp(V/s), delay(s)",self)
         self.lbl2 = QLabel("Amp. step (V)", self)
         self.errlbl = QLabel('Error Display')
 #        self.errlbl.font(QFont.Bold())
-
+        self.ch = QComboBox(self)
+        self.ch.addItems(("1","2"));self.ch.setCurrentIndex(0)
+        self.chlbl = QLabel("CH:", self)
         self.filter = QComboBox(self)
         self.filter.addItems(("Step","Normal","OFF"))
         self.filterlbl = QLabel("Filter:", self)
@@ -66,35 +94,47 @@ class WFM(QMainWindow):
         self.rstlbl = QLabel("Reset Instr.",self)
         self.output = QCheckBox()
         self.outputlbl = QLabel("Output On/Off", self)
-        self.term = QLineEdit()
+        self.sync = QCheckBox()
+        self.synclbl = QLabel("SyncArbs?", self)
+        self.ttime = color_QLineEdit();
+        self.ttimelbl = QLabel("Total wfm Time (s)",self);
+        self.term = color_QLineEdit()
         self.termlbl = QLabel("Impedance: INF or #",self)
         self.gpibInst = QComboBox(self)
         self.gpibInst.setMaximumWidth(100)
         self.gpibInst.addItem('Select GPIB Instrument')
         self.gpibInst.addItems(self.gpibFind())
         self.inst = 'None'
+        self.textstor = ['0','1'];
+        self.ampstor = ['0','1'];
+        self.sratestor = ['1e3','1e3'];
+        self.offsetstor = ['0','0'];
+        self.termstor = ['50','50'];
+        self.outputstor = ['0','0'];
         ## Signal/Slot connections
         self.connect(self.gpibInst, SIGNAL('currentIndexChanged(QString)'),self.gpibConnect)
-        self.connect(self.textbox, SIGNAL('editingFinished()'), self.onChanged)
-        self.connect(self.srate, SIGNAL('editingFinished()'), self.onChanged)
-        self.connect(self.amp, SIGNAL('editingFinished()'), self.onChanged)        
-        self.connect(self.off, SIGNAL('editingFinished()'), self.onChanged)
+        self.connect(self.textbox, SIGNAL('returnPressed()'), self.onChanged)
+        self.connect(self.srate, SIGNAL('returnPressed()'), self.onChanged)
+        self.connect(self.amp, SIGNAL('returnPressed()'), self.onChanged)        
+        self.connect(self.off, SIGNAL('returnPressed()'), self.onChanged)
         self.connect(self.filter, SIGNAL('currentIndexChanged(QString)'), self.onChanged)
-        self.connect(self.term, SIGNAL('editingFinished()'), self.termChanged)
+        self.connect(self.term, SIGNAL('returnPressed()'), self.termChanged)
         self.connect(self.output, SIGNAL('stateChanged(int)'),self.outputChanged)
-#        self.connect(self.ramp1dial,SIGNAL('valueChanged(int)'),self.dataChanged)        
+        self.connect(self.rstbox, SIGNAL('stateChanged(int)'),self.resetChanged)
+        self.connect(self.sync, SIGNAL('stateChanged(int)'),self.syncChanged)
+        self.connect(self.ch, SIGNAL('currentIndexChanged(QString)'),self.chChanged)
         ## Write to main window properties
-        self.setGeometry(300, 300, 400, 400)
+        self.setGeometry(300, 300, 500, 500)
         self.setWindowTitle('33500B WFM Arb.Wfm Generator')
         self.show()
         
         ## Layout widgets on screen
         hbox = QHBoxLayout()
-        for w in [self.lbl, self.textbox, self.rstlbl, self.rstbox, self.gpibInst]:
+        for w in [self.lbl, self.textbox, self.chlbl, self.ch, self.rstlbl, self.rstbox, self.gpibInst]:
             hbox.addWidget(w)
             hbox.setAlignment(w, Qt.AlignVCenter)
         hbox2 = QHBoxLayout()
-        for w in [self.lbl2, self.amp, self.filterlbl, self.filter, self.errlbl]:
+        for w in [self.lbl2, self.amp, self.synclbl, self.sync, self.ttimelbl, self.ttime, self.filterlbl, self.filter, self.errlbl]:
             hbox2.addWidget(w)
             hbox2.setAlignment(w, Qt.AlignVCenter)
         hbox3 = QHBoxLayout()
@@ -112,29 +152,28 @@ class WFM(QMainWindow):
         
         self.main_frame.setLayout(vbox)
         self.setCentralWidget(self.main_frame)
-        
+        self.show()
         
         
     ## Define Changed Functions
     def onChanged(self):
-        
-        self.axes.clear()
         string = unicode(self.textbox.text())
-        self.vars = map(float, string.split())
-        self.buildWFM(self.vars)
-#        xrate = float(self.srate.text())
-#        x= range(len(self.datay))
-        x= self.datax
-        y= self.datay
-        #Update plots
-        self.axes.plot(x,y,'.') #plot data
-#        self.lbl.setText(string) 
-        self.canvas.draw() #update drawing
+        data = map(float, string.split())
+        ampString = unicode(self.amp.text()) #convert amplitude strings
+        amp1=map(float,ampString.split()) #map amplitude data to numbers
+        
+        if len(amp1)!=len(data):
+            self.errlbl.setText('Match length of inputs');
+        else:
+            self.buildWFM()
+        self.plotUpdate()
+
         self.sratelbl.setText('%s Samples, SRate: (Sa/s)' %(self.samples)) #Display new Samples
 
-        if self.samples>10e3:
-            self.errlbl.setText('Too long, reduce Samples<10k')
-        else:
+#        if self.samples>65e3:
+#            self.errlbl.setText('Too long, Samples<65k');          
+
+        if len(amp1)==len(data):
             self.totalpp=max(self.datay)-min(self.datay) #Calc Vpp
             self.amplbl.setText('Total Amp: %sVpp' %(self.totalpp)) #Display new Vpp
             self.loadWFM()
@@ -143,61 +182,138 @@ class WFM(QMainWindow):
             self.srateChanged()
             self.ampChanged()
             self.filterChanged()
-            self.errlbl.setText('No Errors (yet)')
+            self.outputChanged()
+            self.errlbl.setText('No Errors')
+            self.syncChanged()
 
     def ampChanged(self):
-        self.func_write('VOLT %s; *WAI' %self.totalpp); print('Amp changed')
+        self.func_write('SOUR%s:VOLT %s; *WAI' %(self.ch.currentText(),self.totalpp)); print('Amp changed')
         
     def offsetChanged(self):
-        self.func_write('VOLT:OFFSET %s; *WAI' %self.off.text()) ;print('Offset changed')
+        self.func_write('SOUR%s:VOLT:OFFSET %s; *WAI' %(self.ch.currentText(),self.off.text())) ;print('Offset changed')
     
     def srateChanged(self):
-        self.func_write('FUNC:ARB:SRATE %s; *WAI' %self.srate.text());print('SRate Changed')
+        self.func_write('SOUR%s:FUNC:ARB:SRATE %s; *WAI' %(self.ch.currentText(),self.srate.text()));print('SRate Changed')
 
     def filterChanged(self):
-        self.func_write('FUNC:ARB:FILTER %s; *WAI' %self.filter.currentText());print('Filter Changed')
+        self.func_write('SOUR%s:FUNC:ARB:FILTER %s; *WAI' %(self.ch.currentText(),self.filter.currentText()));print('Filter Changed')
         
     def termChanged(self):
         if self.term.text()=='INF':
-            self.func_write('OUTP:LOAD INF; *WAI')
+            self.func_write('OUTP%s:LOAD INF; *WAI' %self.ch.currentText())
             self.ampChanged()
         elif int(self.term.text())<1e3:
 #            term = int(self.term.text())
-            self.func_write('OUTP:LOAD %s; *WAI' %int(self.term.text()))
+            self.func_write('OUTP%s:LOAD %s; *WAI' %(self.ch.currentText(),int(self.term.text())))
             self.ampChanged()
         else:
             self.errlbl.setText('Incorrect Termination')
 #        print('%.1f' %self.func_read('OUTP:LOAD?'))
     
     def outputChanged(self, state=0):
-        if state==2:
-            self.func_write('OUTPUT ON; *WAI')
-        elif state==0:
-            self.func_write('OUTPUT OFF; *WAI')
+        if self.output.isChecked():
+            self.func_write('OUTPUT%s ON; *WAI' %self.ch.currentText())
+        else:
+            self.func_write('OUTPUT%s OFF; *WAI' %self.ch.currentText())
+            
+    def resetChanged(self, state=0):            
+        if self.rstbox.isChecked():
+            self.inst.write('*RST; *WAI') #reset instrument
+            self.inst.write('*CLS; *WAI') #clear instrument
+            self.rstbox.setChecked(0)
+            self.textbox.change_my_color()
+            
+    def plotUpdate(self):
+        #Update plots
+        self.axes.clear()
+        self.axes.plot(self.datax,self.datay,'.-') #plot data
+#        self.lbl.setText(string) 
+        self.canvas.draw() #update drawing
+        
     def loadWFM(self):
-        self.func_write('SOUR:DATA:VOLatile:CLEar; *WAI')
         #Upload waveform and settings
-        name='test'
+        ch=int(self.ch.currentText())
+        name='test%s' %ch
         print('Samples=%s' %len(self.datay))
         datasend=self.datay/(max(abs(self.datay)))
-        self.arbString = ','.join(['%.5f' %num for num in datasend]) #num2str command
-        self.func_write('SOUR:DATA:ARB ' + name + ', ' + self.arbString) #str(arb))
+        self.func_write('FORMAT:BORDER SWAPPED') #binary data format, little endian (LSB first)
+        self.func_write('SOUR%s:DATA:VOLatile:CLEar; *WAI' %self.ch.currentText())
+        self.inst.write_binary_values(u'SOUR%s:DATA:ARB ' %self.ch.currentText() +name+', ', datasend, datatype='f') #https://docs.python.org/2/library/struct.html
+        self.sb=int(self.inst.query('*STB?'));
+        if self.sb==4:
+            err=self.inst.query('SYST:ERR?')
+            self.inst.write('*CLS')
+            print(err)
+        self.func_write('SOUR%s:FUNC:ARB ' %self.ch.currentText() + name ) #use waveform in memory
+#        self.arbString = ','.join(['%.5f' %num for num in datasend]) #num2str command
+#        self.func_write('SOUR%s:DATA:ARB ' %self.ch.currentText() + name + ', ' + self.arbString ) #str(arb))
         self.func_write('*WAI');print('WFM Loading')   #Make sure no other commands are exectued until arb is done downloadin
-        self.func_write('FUNC ARB') #Set to arb. waveform output
-        self.func_write('SOUR:FUNC:ARB ' + name) #use waveform in memory
+        self.func_write('SOUR%s:FUNC ARB' %self.ch.currentText()) #Set to arb. waveform output
+        self.func_write('SOUR%s:FUNC:ARB ' %self.ch.currentText() + name ) #use waveform in memory
+        
+        if self.sync.isChecked():
+            self.func_write('*WAI;SOUR%s:FUNC:ARB:SYNC' %self.ch.currentText())
         print('WFM Loaded')
+        
+    def chChanged(self):
+        self.func_write('DISP:FOCUS CH%s; *WAI' %self.ch.currentText()); print('Channel changed')
+        
+        if self.textstor==['0','1']:
+            load=0; #print('no loading of data')
+        else:
+            load=1; #print('loading data')
+        ch_new=int(self.ch.currentText())-1;
+        ch_old=int(not(ch_new));
+#        print('Newch:%s OldCh:%s'%(ch_new,ch_old))
+        self.textstor[ch_old] = self.textbox.text();
+        self.ampstor[ch_old] = self.amp.text();
+        self.sratestor[ch_old] = self.srate.text();
+        self.offsetstor[ch_old] = self.off.text();
+        self.termstor[ch_old] = self.term.text();
+        self.outputstor[ch_old] = int(self.output.isChecked())
+#        print(self.textstor)
+        if load:
+            self.textbox.setText(self.textstor[ch_new]);self.textbox.reset_my_color()
+            self.amp.setText(self.ampstor[ch_new]);self.amp.reset_my_color()
+            self.srate.setText(self.sratestor[ch_new]);self.srate.reset_my_color()
+            self.off.setText(self.offsetstor[ch_new]);self.off.reset_my_color()
+            self.term.setText(self.termstor[ch_new]);self.term.reset_my_color()
+            self.output.setChecked(bool(self.outputstor[ch_new]));
+            print('loading data')
+            self.buildWFM()
+            self.plotUpdate()
+
+        
+#        self.textbox.setText(self.textstor[ch])
+
+    def syncChanged(self, state=0):
+        if self.sync.isChecked():
+            self.func_write('FUNC:ARB:SYNC; *WAI')
+            self.func_write('SOUR%s:FUNC:ARB:SYNC; *WAI' %self.ch.currentText())
+            print('ArbSync On')
+        elif ~self.sync.isChecked():
+            print('ArbSync Not On')
+#        self.onChanged();
+            
             
     ##Arb WFM functions
-    def buildWFM(self,data):
+    def buildWFM(self):
         wfm=np.zeros(0)
         stor=np.zeros(0)
         aptr=0
+        
+        string = unicode(self.textbox.text())
+        data = map(float, string.split())
+        ampString = unicode(self.amp.text()) #convert amplitude strings
+        amp1=map(float,ampString.split()) #map amplitude data to numbers
+        
 #        amp1=float(self.amp.text())
-        ampString = unicode(self.amp.text())
-        amp1=map(float,ampString.split())
-        srate1=float(self.srate.text())
+#        ampString = unicode(self.amp.text()) #convert amplitude strings
+#        amp1=map(float,ampString.split()) #map amplitude data to numbers
+        srate1=float(self.srate.text()) #Read sample rate
         for i in range(len(data)):
             if i%2==0: #even=ramp
+                if data[i]==0: print('ramp0');continue;
                 samp=abs(int(amp1[i]*srate1/data[i]))
                 newpt=aptr+float(data[i])*samp/srate1
                 stor=np.linspace(aptr,newpt,num=samp)
@@ -205,9 +321,22 @@ class WFM(QMainWindow):
                 aptr=newpt
             elif i%2!=0: #odd=delay
                 samp=abs(int(srate1*data[i]))
-                stor=np.linspace(aptr,aptr,num=samp)
+                newpt=aptr+float(amp1[i]) #Amp jump during delay section
+                stor=np.linspace(newpt,newpt,num=samp) #Amp level during delay
 #                print('delay')
+                aptr=newpt
             wfm=np.hstack((wfm,stor))
+        if self.sync.isChecked():
+#            ttime=float(self.ttime.text());print('ttime=%s'%ttime)
+#            delta=ttime-len(wfm)/srate1;print('delta=%s'%delta);print('extrasamples=%s'%(delta*srate1))
+#            wfm=np.hstack((wfm,np.ones(delta*srate1)*wfm[-1]))
+            for n in [1,2]:
+                self.func_write('SOUR%s:BURS:STAT OFF' %n) #Turn off burst mode to setup settings          
+                self.func_write('SOUR%s:BURST:MODE TRIG; *WAI' %n)      
+                self.func_write('SOUR%s:BURST:NCYC 1' %n)
+                self.func_write('TRIG%s:SOUR TIM' %n)
+                self.func_write('TRIG%s:TIM %s' %(n,self.ttime.text()) )
+                self.func_write('SOUR%s:BURS:STAT ON' %n) #Turn on burst mode after all other settings          
         self.samples=len(wfm)
         self.datay=wfm
         self.datax=np.arange(len(wfm))/srate1
@@ -215,7 +344,13 @@ class WFM(QMainWindow):
     ## GPIB Functions
     def func_write(self,func):
         if self.conBool:
-            self.inst.write(func)   
+            self.inst.write(func);
+            self.sb=int(self.inst.query('*STB?'));
+            if self.sb==4:
+                err=self.inst.query('SYST:ERR?')
+                self.inst.write('*CLS')
+                print(err)
+#            else: print('no error');
         else:
             print('not connected')
     def func_read(self,func):
@@ -237,6 +372,8 @@ class WFM(QMainWindow):
             self.inst.write('*CLS; *WAI') #clear instrument
         self.conBool=True
         self.inst.chunck_size = pow(2,20)
+        self.inst.timeout = 10000;
+        
     def gpibFind(self):
         rm = visa.ResourceManager()
         devices=rm.list_resources()
@@ -258,6 +395,7 @@ class WFM(QMainWindow):
 app = QtGui.QApplication(sys.argv)
 form = WFM()
 form.show()
+self=form
 ## Troubleshooting
 #    print(form.gpibFind())
 #    x=form.gpibFind()
