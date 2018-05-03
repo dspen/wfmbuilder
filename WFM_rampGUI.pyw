@@ -9,6 +9,7 @@ v1) connect to instrument and build ch1 waveform of ramp, delay, ramp, delay, et
     Can vary output on/off, impedance, filter shapesample rate, and offset voltage.
 v2) Add amplitude jump during delay section, total time mode for syncing
     added 2nd channel, sync timing via trigger (not via datapts). output off when switching
+v2.1) added 2 string qualifier to each function builder. rm1, dl1, er1,2
 @author: Daryl Spencer
 """
 
@@ -21,7 +22,7 @@ from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
-__version__ = '2.0.6'
+__version__ = '2.1.0'
 class color_QLineEdit(QLineEdit):
 
     def __init__(self):
@@ -59,7 +60,7 @@ class WFM(QMainWindow):
         self.srate.setText("1e4");self.srate.reset_my_color()
         self.term.setText('50');self.term.reset_my_color()
         self.deltime.setText('0');self.deltime.reset_my_color()
-        self.ttime.setText('1');self.ttime.reset_my_color()
+        self.ttime.setText('0.1');self.ttime.reset_my_color()
 
     def initUI(self):      
         self.main_frame =QWidget()
@@ -165,12 +166,9 @@ class WFM(QMainWindow):
         
     ## Define Changed Functions
     def onChanged(self):
-        string = unicode(self.textbox.text())
-        data = map(float, string.split())
-        ampString = unicode(self.amp.text()) #convert amplitude strings
-        amp1=map(float,ampString.split()) #map amplitude data to numbers
-        
-        if len(amp1)!=len(data):
+        string = unicode(self.textbox.text()).split()
+        ampString = unicode(self.amp.text()).split() #convert amplitude strings        
+        if len(ampString)!=len(string):
             self.errlbl.setText('Match length of inputs');
         else:
             self.buildWFM()
@@ -181,7 +179,7 @@ class WFM(QMainWindow):
 #        if self.samples>65e3:
 #            self.errlbl.setText('Too long, Samples<65k');          
 
-        if len(amp1)==len(data):
+        if len(ampString)==len(string):
             self.totalpp=max(self.datay)-min(self.datay) #Calc Vpp
             self.amplbl.setText('Total Amp: %sVpp' %(self.totalpp)) #Display new Vpp
             self.loadWFM()
@@ -326,30 +324,37 @@ class WFM(QMainWindow):
         wfm=np.zeros(0)
         stor=np.zeros(0)
         aptr=0
+        srate=float(self.srate.text()) #Read sample rate
+        fstring = unicode(self.textbox.text()).split()
+        ampString = unicode(self.amp.text()).split() #convert amplitude strings
+#        amp1=map(float,ampString) #map amplitude data to numbers
+#        fdata = map(float, fstring)
         
-        string = unicode(self.textbox.text())
-        data = map(float, string.split())
-        ampString = unicode(self.amp.text()) #convert amplitude strings
-        amp1=map(float,ampString.split()) #map amplitude data to numbers
         
-#        amp1=float(self.amp.text())
-#        ampString = unicode(self.amp.text()) #convert amplitude strings
-#        amp1=map(float,ampString.split()) #map amplitude data to numbers
-        srate1=float(self.srate.text()) #Read sample rate
-        for i in range(len(data)):
-            if i%2==0: #even=ramp
-                if data[i]==0: print('ramp0');continue;
-                samp=abs(int(amp1[i]*srate1/data[i]))
-                newpt=aptr+float(data[i])*samp/srate1
+        for i in range(len(fstring)):
+            func = fstring[i][:2]; #read first 2 strings for func
+            data = map(float,fstring[i][2:].split(',')); #read remainder for constant
+            amp1 = float(ampString[i])
+            if func == 'rm': #ramp
+                if data==0: print('ramp0');continue;
+                samp=abs(int(amp1*srate/data[0]))
+                newpt=aptr+float(data[0])*samp/srate
                 stor=np.linspace(aptr,newpt,num=samp)
 #                print('ramp')
                 aptr=newpt
-            elif i%2!=0: #odd=delay
-                samp=abs(int(srate1*data[i]))
-                newpt=aptr+float(amp1[i]) #Amp jump during delay section
+            elif func == 'dl': #delay
+                samp=abs(int(srate*data[0]))
+                newpt=aptr+float(amp1) #Amp jump during delay section
                 stor=np.linspace(newpt,newpt,num=samp) #Amp level during delay
 #                print('delay')
                 aptr=newpt
+            elif func == 'er': #build exponential rise
+                if len(data)!=2: print('Exp. needs 2 inputs (E.g.: er5,10)'); continue;
+                samp=abs(int(srate*data[1]))
+                x=np.linspace(0,data[1],num=samp)
+                stor=-amp1*np.exp(-data[0]*x)+aptr+amp1
+                aptr=stor[-1]
+
             wfm=np.hstack((wfm,stor))
         if self.sync.isChecked():
 #            ttime=float(self.ttime.text());print('ttime=%s'%ttime)
@@ -370,7 +375,7 @@ class WFM(QMainWindow):
                 self.func_write('SOUR%s:BURS:STAT ON' %n) #Turn on burst mode after all other settings          
         self.samples=len(wfm)
         self.datay=wfm
-        self.datax=np.arange(len(wfm))/srate1
+        self.datax=np.arange(len(wfm))/srate
                     
     ## GPIB Functions
     def func_write(self,func):
@@ -409,9 +414,8 @@ class WFM(QMainWindow):
         rm = visa.ResourceManager()
         devices=rm.list_resources()
         return devices
-        
 
-        
+
 def main():
     
     app = QtGui.QApplication(sys.argv)
@@ -423,10 +427,10 @@ def main():
 if __name__ == "__main__":
     main()
 
-app = QtGui.QApplication(sys.argv)
-form = WFM()
-form.show()
-self=form
+#app = QtGui.QApplication(sys.argv)
+#form = WFM()
+#form.show()
+#self=form
 ## Troubleshooting
 #    print(form.gpibFind())
 #    x=form.gpibFind()
