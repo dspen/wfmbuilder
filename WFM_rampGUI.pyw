@@ -21,7 +21,7 @@ from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
-__version__ = '2.0.5'
+__version__ = '2.0.6'
 class color_QLineEdit(QLineEdit):
 
     def __init__(self):
@@ -51,13 +51,14 @@ class WFM(QMainWindow):
         
         self.conBool=False
         self.initUI()
-        self.textbox.setText('0 0 500 0 -500');
+        self.textbox.setText('0 0 1000 0 -1000');
         self.amp.setText('0 -2.5 5 0 -5');self.amp.reset_my_color()
 
         self.off.setText('0');self.off.reset_my_color()
         self.totalpp=0
         self.srate.setText("1e4");self.srate.reset_my_color()
         self.term.setText('50');self.term.reset_my_color()
+        self.deltime.setText('0');self.deltime.reset_my_color()
         self.ttime.setText('1');self.ttime.reset_my_color()
 
     def initUI(self):      
@@ -96,6 +97,8 @@ class WFM(QMainWindow):
         self.outputlbl = QLabel("Output On/Off", self)
         self.sync = QCheckBox()
         self.synclbl = QLabel("SyncArbs?", self)
+        self.deltime = color_QLineEdit();
+        self.deltimelbl = QLabel('Delay Time (s)',self)
         self.ttime = color_QLineEdit();
         self.ttimelbl = QLabel("Total wfm Time (s)",self);
         self.term = color_QLineEdit()
@@ -110,6 +113,8 @@ class WFM(QMainWindow):
         self.sratestor = ['1e3','1e3'];
         self.offsetstor = ['0','0'];
         self.termstor = ['50','50'];
+        self.delstor = ['0','0'];
+        self.filterstor = [0,0]
         self.outputstor = ['0','0'];
         ## Signal/Slot connections
         self.connect(self.gpibInst, SIGNAL('currentIndexChanged(QString)'),self.gpibConnect)
@@ -123,8 +128,10 @@ class WFM(QMainWindow):
         self.connect(self.rstbox, SIGNAL('stateChanged(int)'),self.resetChanged)
         self.connect(self.sync, SIGNAL('stateChanged(int)'),self.syncChanged)
         self.connect(self.ch, SIGNAL('currentIndexChanged(QString)'),self.chChanged)
+        self.connect(self.deltime, SIGNAL('returnPressed()'), self.textbox.change_my_color)
+        self.connect(self.ttime, SIGNAL('returnPressed()'), self.textbox.change_my_color)
         ## Write to main window properties
-        self.setGeometry(300, 300, 500, 500)
+        self.setGeometry(300, 300, 800, 500) #x,y,w,h
         self.setWindowTitle('33500B WFM Arb.Wfm Generator')
         self.show()
         
@@ -134,7 +141,8 @@ class WFM(QMainWindow):
             hbox.addWidget(w)
             hbox.setAlignment(w, Qt.AlignVCenter)
         hbox2 = QHBoxLayout()
-        for w in [self.lbl2, self.amp, self.synclbl, self.sync, self.ttimelbl, self.ttime, self.filterlbl, self.filter, self.errlbl]:
+        for w in [self.lbl2, self.amp, self.synclbl, self.sync, self.deltimelbl, self.deltime, 
+                  self.ttimelbl, self.ttime, self.filterlbl, self.filter, self.errlbl]:
             hbox2.addWidget(w)
             hbox2.setAlignment(w, Qt.AlignVCenter)
         hbox3 = QHBoxLayout()
@@ -194,7 +202,14 @@ class WFM(QMainWindow):
     
     def srateChanged(self):
         self.func_write('SOUR%s:FUNC:ARB:SRATE %s; *WAI' %(self.ch.currentText(),self.srate.text()));print('SRate Changed')
-
+        realsrate = float(self.func_read('SOUR%s:FUNC:ARB:SRATE?' %self.ch.currentText()))
+        if realsrate != float(self.srate.text()):
+            print('Sample rate not worthy')
+            redpalette = QPalette()
+            redpalette.setColor(self.backgroundRole(), QColor('white'))
+            redpalette.setColor(self.foregroundRole(), QColor('red'))
+            self.srate.setPalette(redpalette)
+        
     def filterChanged(self):
         self.func_write('SOUR%s:FUNC:ARB:FILTER %s; *WAI' %(self.ch.currentText(),self.filter.currentText()));print('Filter Changed')
         
@@ -276,6 +291,8 @@ class WFM(QMainWindow):
         self.sratestor[ch_old] = self.srate.text();
         self.offsetstor[ch_old] = self.off.text();
         self.termstor[ch_old] = self.term.text();
+        self.delstor[ch_old] = self.deltime.text();
+        self.filterstor[ch_old] = self.filter.currentIndex();
         self.outputstor[ch_old] = int(self.output.isChecked())
 #        print(self.textstor)
         if load:
@@ -284,6 +301,8 @@ class WFM(QMainWindow):
             self.srate.setText(self.sratestor[ch_new]);self.srate.reset_my_color()
             self.off.setText(self.offsetstor[ch_new]);self.off.reset_my_color()
             self.term.setText(self.termstor[ch_new]);self.term.reset_my_color()
+            self.deltime.setText(self.delstor[ch_new]);self.deltime.reset_my_color()
+            self.filter.setCurrentIndex(self.filterstor[ch_new]);
             self.output.setChecked(bool(self.outputstor[ch_new]));
             print('loading data')
             self.buildWFM()
@@ -336,12 +355,18 @@ class WFM(QMainWindow):
 #            ttime=float(self.ttime.text());print('ttime=%s'%ttime)
 #            delta=ttime-len(wfm)/srate1;print('delta=%s'%delta);print('extrasamples=%s'%(delta*srate1))
 #            wfm=np.hstack((wfm,np.ones(delta*srate1)*wfm[-1]))
+            ch_new=int(self.ch.currentText())-1;
+            ch_old=int(not(ch_new));
             for n in [1,2]:
                 self.func_write('SOUR%s:BURS:STAT OFF' %n) #Turn off burst mode to setup settings          
                 self.func_write('SOUR%s:BURST:MODE TRIG; *WAI' %n)      
                 self.func_write('SOUR%s:BURST:NCYC 1' %n)
                 self.func_write('TRIG%s:SOUR TIM' %n)
                 self.func_write('TRIG%s:TIM %s' %(n,self.ttime.text()) )
+                if n==ch_old+1:
+                    self.func_write('TRIG%s:DELAY %s' %(n,self.delstor[n-1]))
+                elif n==ch_new+1:
+                    self.func_write('TRIG%s:DELAY %s' %(n,self.deltime.text()))
                 self.func_write('SOUR%s:BURS:STAT ON' %n) #Turn on burst mode after all other settings          
         self.samples=len(wfm)
         self.datay=wfm
@@ -387,16 +412,16 @@ class WFM(QMainWindow):
         
 
         
-#def main():
-#    
-#    app = QtGui.QApplication(sys.argv)
-#    form = WFM()
-#    form.show()
-##    sys.exit(app.exec_())
-##    app.exec_()
-#    
-#if __name__ == "__main__":
-#    main()
+def main():
+    
+    app = QtGui.QApplication(sys.argv)
+    form = WFM()
+    form.show()
+    sys.exit(app.exec_())
+    app.exec_()
+    
+if __name__ == "__main__":
+    main()
 
 app = QtGui.QApplication(sys.argv)
 form = WFM()
