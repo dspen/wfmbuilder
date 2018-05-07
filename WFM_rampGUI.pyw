@@ -14,7 +14,8 @@ v2.1) added 2 string qualifier to each function builder. rm1, dl1, er1,2
 """
 
 from PyQt4 import QtGui, QtCore
-import sys, visa
+import sys
+import pyvisa as visa
 import numpy as np
 from PyQt4.QtCore import *
 from PyQt4.QtGui import *
@@ -22,7 +23,7 @@ from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
-__version__ = '2.1.1'
+__version__ = '2.1.2'
 class color_QLineEdit(QLineEdit):
 
     def __init__(self):
@@ -406,7 +407,7 @@ class WFM(QMainWindow):
         
     def gpibConnect(self,address):    
         rm = visa.ResourceManager()
-        self.inst = rm.open_resource(address)
+        self.inst = rm.open_resource(str(address))
         print(self.inst.query('*IDN?'))
         if self.rstbox.checkState() ==2:
             self.inst.write('*RST; *WAI') #reset instrument
