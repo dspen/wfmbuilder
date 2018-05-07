@@ -22,7 +22,7 @@ from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
-__version__ = '2.1.0'
+__version__ = '2.1.1'
 class color_QLineEdit(QLineEdit):
 
     def __init__(self):
@@ -52,9 +52,8 @@ class WFM(QMainWindow):
         
         self.conBool=False
         self.initUI()
-        self.textbox.setText('0 0 1000 0 -1000');
-        self.amp.setText('0 -2.5 5 0 -5');self.amp.reset_my_color()
-
+        self.textbox.setText('dl0.00015 rm45000000 er1e4,0.01');
+        self.amp.setText('0 1 2');self.amp.reset_my_color()
         self.off.setText('0');self.off.reset_my_color()
         self.totalpp=0
         self.srate.setText("1e4");self.srate.reset_my_color()
@@ -334,27 +333,33 @@ class WFM(QMainWindow):
         for i in range(len(fstring)):
             func = fstring[i][:2]; #read first 2 strings for func
             data = map(float,fstring[i][2:].split(',')); #read remainder for constant
-            amp1 = float(ampString[i])
+            amp1 = map(float,ampString[i].split(','))
             if func == 'rm': #ramp
                 if data==0: print('ramp0');continue;
-                samp=abs(int(amp1*srate/data[0]))
+                samp=abs(int(amp1[0]*srate/data[0]))
                 newpt=aptr+float(data[0])*samp/srate
                 stor=np.linspace(aptr,newpt,num=samp)
 #                print('ramp')
                 aptr=newpt
             elif func == 'dl': #delay
                 samp=abs(int(srate*data[0]))
-                newpt=aptr+float(amp1) #Amp jump during delay section
+                newpt=aptr+float(amp1[0]) #Amp jump during delay section
                 stor=np.linspace(newpt,newpt,num=samp) #Amp level during delay
 #                print('delay')
                 aptr=newpt
-            elif func == 'er': #build exponential rise
+            elif func == 'er': #build exponential rise f(t1,ttotal)=A-A*exp(-t1)
                 if len(data)!=2: print('Exp. needs 2 inputs (E.g.: er5,10)'); continue;
                 samp=abs(int(srate*data[1]))
                 x=np.linspace(0,data[1],num=samp)
-                stor=-amp1*np.exp(-data[0]*x)+aptr+amp1
+                stor=-amp1[0]*np.exp(-data[0]*x)+aptr+amp1[0]
                 aptr=stor[-1]
-
+            elif func == 'dr': #double exp. rise, f(t1,t2,ttotal)=A1*exp(t1)+A2*exp(t2)
+                if len(data)!=3: print('Exp. needs 3 inputs (E.g.: dr5,10,0.1)'); continue;
+                samp=abs(int(srate*data[2]))
+                x=np.linspace(0,data[2],num=samp)
+                stor=-amp1[0]*np.exp(-data[0]*x) - amp1[1]*np.exp(-data[1]*x) + aptr + (amp1[0]+amp1[1]);
+                aptr=stor[-1]
+            else: print('Badly formed function at pos%s'%(i+1))
             wfm=np.hstack((wfm,stor))
         if self.sync.isChecked():
 #            ttime=float(self.ttime.text());print('ttime=%s'%ttime)
