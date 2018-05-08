@@ -36,7 +36,7 @@ Download .zip file or clone from GitHub url into local directory.
 dl1e05 #delay in seconds
 rm45e6 #ramp in V/s slope
 er1e4,0.05 #exponential ramp with time constant in s, and total time of section
-cs5e6,1,0.5  #cosine builder, set period in s, start phase/pi, end phase/pi (1,2 = valley to valley) 
+cs5e6,1,0.5  #cosine builder, set period in Hz, start phase/pi, end phase/pi (1,2 = valley to valley) 
 ```
 ### Defining waveform 2) Amp. step
 * Then define amplitude step for each waveform
