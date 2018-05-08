@@ -2,6 +2,8 @@
 
 GUI based Python program to send custom waveforms to a Agilent/Keysight 33600B
 
+![Example](https://github.com/dspen/wfmbuilder/blob/master/egPicture.PNG)
+
 ## Getting Started
 
 Initial instructions:
