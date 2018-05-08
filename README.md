@@ -33,18 +33,18 @@ In the main window, you can now build a waveform using strings
 Define waveform functions separated by space
 Begin with 2 string qualifier, followed by variable number of csv inputs to be interpreted as floats:
 
-'''
+```
 dl1e05 #delay in seconds
 rm45e6 #ramp in V/s slope
 er1e4,0.05 #exponential ramp with time constant in s, and total time of section
 cs5e6,1,0.5  #cosine builder, set period in s, start phase/pi, end phase/pi (1,2 = valley to valley) 
-'''
+```
 
 Then define amplitude step for each waveform
 
-'''
+```
 0 1 2 1
-'''
+```
 
 ## Versioning
 
