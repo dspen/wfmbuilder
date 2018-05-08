@@ -10,6 +10,9 @@ v1) connect to instrument and build ch1 waveform of ramp, delay, ramp, delay, et
 v2) Add amplitude jump during delay section, total time mode for syncing
     added 2nd channel, sync timing via trigger (not via datapts). output off when switching
 v2.1) added 2 string qualifier to each function builder. rm1, dl1, er1,2
+v2.3) add cosine function qualifier, cs500,1,1
+
+TO DO) Add FFT plot functionality (with calculation time restrictions)
 @author: Daryl Spencer
 """
 
@@ -23,7 +26,7 @@ from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
-__version__ = '2.1.2'
+__version__ = '2.1.3'
 class color_QLineEdit(QLineEdit):
 
     def __init__(self):
@@ -53,8 +56,8 @@ class WFM(QMainWindow):
         
         self.conBool=False
         self.initUI()
-        self.textbox.setText('dl0.00015 rm45000000 er1e4,0.01');
-        self.amp.setText('0 1 2');self.amp.reset_my_color()
+        self.textbox.setText('dl0.00015 rm45000000 er1e4,0.01 cs500,1,1');
+        self.amp.setText('0 1 2 1');self.amp.reset_my_color()
         self.off.setText('0');self.off.reset_my_color()
         self.totalpp=0
         self.srate.setText("1e4");self.srate.reset_my_color()
@@ -85,6 +88,7 @@ class WFM(QMainWindow):
         self.lbl = QLabel("Alt. ramp(V/s), delay(s)",self)
         self.lbl2 = QLabel("Amp. step (V)", self)
         self.errlbl = QLabel('Error Display')
+        self.errlbl.setStyleSheet('color: red')
 #        self.errlbl.font(QFont.Bold())
         self.ch = QComboBox(self)
         self.ch.addItems(("1","2"));self.ch.setCurrentIndex(0)
@@ -107,6 +111,7 @@ class WFM(QMainWindow):
         self.gpibInst = QComboBox(self)
         self.gpibInst.setMaximumWidth(100)
         self.gpibInst.addItem('Select GPIB Instrument')
+        self.gpibInst.setMinimumWidth(200)
         self.gpibInst.addItems(self.gpibFind())
         self.inst = 'None'
         self.textstor = ['0','1'];
@@ -163,6 +168,11 @@ class WFM(QMainWindow):
         self.setCentralWidget(self.main_frame)
         self.show()
         
+    def fftWFM(self):
+        d=1.0/float(self.srate.text())
+        hs=np.fft.fft(self.datay)
+        fs=np.fft.fftfreq(int(len(self.datax)),d)
+        return fs, hs
         
     ## Define Changed Functions
     def onChanged(self):
@@ -171,6 +181,7 @@ class WFM(QMainWindow):
         if len(ampString)!=len(string):
             self.errlbl.setText('Match length of inputs');
         else:
+            self.errlbl.clear()
             self.buildWFM()
         self.plotUpdate()
 
@@ -189,7 +200,7 @@ class WFM(QMainWindow):
             self.ampChanged()
             self.filterChanged()
             self.outputChanged()
-            self.errlbl.setText('No Errors')
+            #self.errlbl.setText('No Errors')
             self.syncChanged()
 
     def ampChanged(self):
@@ -212,16 +223,19 @@ class WFM(QMainWindow):
         self.func_write('SOUR%s:FUNC:ARB:FILTER %s; *WAI' %(self.ch.currentText(),self.filter.currentText()));print('Filter Changed')
         
     def termChanged(self):
+        self.errlbl.clear()
         if self.term.text()=='INF':
             self.func_write('OUTP%s:LOAD INF; *WAI' %self.ch.currentText())
+            print('Termintation changed')
             self.ampChanged()
         elif int(self.term.text())<1e3:
 #            term = int(self.term.text())
             self.func_write('OUTP%s:LOAD %s; *WAI' %(self.ch.currentText(),int(self.term.text())))
+            print('Termination changed')
             self.ampChanged()
         else:
             self.errlbl.setText('Incorrect Termination')
-#        print('%.1f' %self.func_read('OUTP:LOAD?'))
+        #print('%.1f' %self.func_read('OUTP:LOAD?'))
     
     def outputChanged(self, state=0):
         if self.output.isChecked():
@@ -239,7 +253,7 @@ class WFM(QMainWindow):
     def plotUpdate(self):
         #Update plots
         self.axes.clear()
-        self.axes.plot(self.datax,self.datay,'.-') #plot data
+        self.axes.plot(self.datax,float(self.off.text())+self.datay,'.-') #plot data
 #        self.lbl.setText(string) 
         self.canvas.draw() #update drawing
         
@@ -323,10 +337,11 @@ class WFM(QMainWindow):
     def buildWFM(self):
         wfm=np.zeros(0)
         stor=np.zeros(0)
-        aptr=0
+        aptr=0 #pointer to hold last amplitude value of section
         srate=float(self.srate.text()) #Read sample rate
         fstring = unicode(self.textbox.text()).split()
         ampString = unicode(self.amp.text()).split() #convert amplitude strings
+        pi = np.pi
 #        amp1=map(float,ampString) #map amplitude data to numbers
 #        fdata = map(float, fstring)
         
@@ -340,13 +355,13 @@ class WFM(QMainWindow):
                 samp=abs(int(amp1[0]*srate/data[0]))
                 newpt=aptr+float(data[0])*samp/srate
                 stor=np.linspace(aptr,newpt,num=samp)
-#                print('ramp')
+                #print('ramp')
                 aptr=newpt
             elif func == 'dl': #delay
                 samp=abs(int(srate*data[0]))
                 newpt=aptr+float(amp1[0]) #Amp jump during delay section
                 stor=np.linspace(newpt,newpt,num=samp) #Amp level during delay
-#                print('delay')
+                #print('delay')
                 aptr=newpt
             elif func == 'er': #build exponential rise f(t1,ttotal)=A-A*exp(-t1)
                 if len(data)!=2: print('Exp. needs 2 inputs (E.g.: er5,10)'); continue;
@@ -359,6 +374,16 @@ class WFM(QMainWindow):
                 samp=abs(int(srate*data[2]))
                 x=np.linspace(0,data[2],num=samp)
                 stor=-amp1[0]*np.exp(-data[0]*x) - amp1[1]*np.exp(-data[1]*x) + aptr + (amp1[0]+amp1[1]);
+                aptr=stor[-1]
+            elif func == 'cs': 
+            #cosine, f(freq, thetastart/pi, thetatotal/pi) = A*cosine(2pi*freq + pi*theta)
+                if len(data)!=3: 
+                    print('Cosine needs 3 inputs (E.g.: cs500,0,1/2)'); continue;
+                ttotal = (data[2])/(2*data[0])
+                samp=abs(int(srate*ttotal))
+                x=np.linspace(0,ttotal,num=samp)
+                func=amp1[0]/2.0*np.cos(2*pi*data[0]*x+pi*data[1])
+                stor=func - (func[0] - aptr)
                 aptr=stor[-1]
             else: print('Badly formed function at pos%s'%(i+1))
             wfm=np.hstack((wfm,stor))
@@ -388,13 +413,15 @@ class WFM(QMainWindow):
         if self.conBool:
             self.inst.write(func);
             self.sb=int(self.inst.query('*STB?'));
+            self.err=self.inst.query('SYST:ERR?')
             if self.sb==4:
-                err=self.inst.query('SYST:ERR?')
                 self.inst.write('*CLS')
-                print(err)
-#            else: print('no error');
+                self.errlbl.setText(str(self.err))
+                print(str(self.err))
         else:
             print('not connected')
+        QApplication.processEvents()
+        
     def func_read(self,func):
         if self.conBool:
             result=self.inst.query(func)
@@ -407,6 +434,7 @@ class WFM(QMainWindow):
         
     def gpibConnect(self,address):    
         rm = visa.ResourceManager()
+        print(address)
         self.inst = rm.open_resource(str(address))
         print(self.inst.query('*IDN?'))
         if self.rstbox.checkState() ==2:
