@@ -10,23 +10,30 @@ v1) connect to instrument and build ch1 waveform of ramp, delay, ramp, delay, et
 v2) Add amplitude jump during delay section, total time mode for syncing
     added 2nd channel, sync timing via trigger (not via datapts). output off when switching
 v2.1) added 2 string qualifier to each function builder. rm1, dl1, er1,2
-v2.3) add cosine function qualifier, cs500,1,1
+v2.1.3) add cosine function qualifier, cs500,1,1
+v2.2) Major new addition, tabbed version layout, and custom function drawing in tab2
+v3.0.0) Add new tab to draw wfm, requires pyQtGraph and scipy.interpolate install
 
 TO DO) Add FFT plot functionality (with calculation time restrictions)
 @author: Daryl Spencer
 """
 
-from PyQt4 import QtGui, QtCore
+#from PyQt4 import QtGui, QtCore
 import sys
-import pyvisa as visa
+#import pyvisa as visa
+from pyvisa import ResourceManager
 import numpy as np
-from PyQt4.QtCore import *
-from PyQt4.QtGui import *
+from PyQt4.QtCore import SIGNAL, Qt
+from PyQt4.QtGui import (QApplication,QMainWindow,QWidget,QLabel,QPalette,QLineEdit,QComboBox,
+    QColor,QCheckBox,QGridLayout,QPushButton,QHBoxLayout,QVBoxLayout,QTabWidget,
+    QTableWidget,QTableWidgetItem,QTextEdit)
 from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
+import pyqtgraph as pg
+import scipy.interpolate as interp
 
-__version__ = '2.1.3'
+__version__ = '3.0.0-b1'
 class color_QLineEdit(QLineEdit):
 
     def __init__(self):
@@ -34,29 +41,179 @@ class color_QLineEdit(QLineEdit):
 
         self.textChanged.connect(self.change_my_color)
         self.returnPressed.connect(self.reset_my_color)
-        
+
         self.reset_my_color()
-        
+
     def change_my_color(self):
         palette = QPalette()
         palette.setColor(self.backgroundRole(), QColor('black'))
         palette.setColor(self.foregroundRole(), QColor('white'))
         self.setPalette(palette)
-        
+
     def reset_my_color(self):
         palette = QPalette()
         palette.setColor(self.backgroundRole(), QColor('white'))
         palette.setColor(self.foregroundRole(), QColor('black'))
         self.setPalette(palette)
 
+class pyqtBuilder(QWidget):
+
+    def __init__(self):
+        super(pyqtBuilder, self).__init__()
+        #Variable Definitions
+        self.srate=50000; #samples/s rate
+        #self.datanum=10000; #number of plot data points
+        self.xrange = 1e-5;
+        self.yrange = 10;
+        self.controls = [];
+        self.xsort=[0,1e-3];
+        self.ysort=[0,0];
+        self.main()
+
+    def main(self):
+        numcon = 5; #Initial number of controls
+
+        l= QGridLayout();
+        # Widgets
+        self.p1 = pg.PlotWidget(title='Input Ramp')
+        self.p2 = pg.PlotWidget(title='Convolved')
+        btn_control = QPushButton("Add Control Point")
+        self.btnlbl_cload = QLabel("Cont. Load")
+        self.btn_cload = QCheckBox()
+        self.btn_load = QPushButton("Upload Data")
+        self.dat_paste= QPushButton("Copy data to graph")
+        self.xtransform = color_QLineEdit()
+        self.ytransform = color_QLineEdit()
+        self.xtransform.setText("1");self.xtransform.reset_my_color()
+        self.ytransform.setText("1");self.ytransform.reset_my_color()
+        self.dataxBox = QTextEdit()
+        self.dataxBox.setTabChangesFocus(True);
+        self.datayBox = QTextEdit()
+        self.datayBox.setTabChangesFocus(True);
+        self.table = QTableWidget(numcon,2)
+
+        for i in range(numcon):
+            self.controls.append(pg.ROI([self.xrange*i/float(numcon),self.yrange*i/float(numcon)],
+                                         size=pg.Point(self.xrange/10,self.yrange/10)));
+
+        #Widget Layout
+        l.addWidget(self.p1,0,0)
+#        l.addWidget(self.table,0,1)
+#        l.addWidget(self.dataxBox,1,1)
+        hbox = QHBoxLayout();
+        for widget in [btn_control,self.btn_load,self.btnlbl_cload,self.btn_cload,
+                       self.xtransform,self.ytransform]:
+            hbox.addWidget(widget)
+        hbox2 = QHBoxLayout();
+        for widget in [self.dataxBox,self.datayBox]:
+            hbox2.addWidget(widget)
+        l.addLayout(hbox,1,0)
+        l.addLayout(hbox2,0,1)
+        l.addWidget(self.dat_paste,1,1)
+        self.setLayout(l)
+
+        #Initial Signal connections
+        btn_control.clicked.connect(self.addControl); #Button signal
+        self.dat_paste.clicked.connect(self.updateGraph); #Button signal
+        self.connect(self.xtransform, SIGNAL('returnPressed()'), self.transformAxes)
+        self.connect(self.ytransform, SIGNAL('returnPressed()'), self.transformAxes)
+        for item in self.controls:
+            item.sigRegionChangeFinished.connect(lambda:self.rePlot());
+            self.p1.addItem(item)
+
+        self.rePlot();
+
+    def updateGraph(self):
+        print('updating graph')
+        xdata = map(float, (self.dataxBox.toPlainText().split(',')));
+        ydata = map(float, (self.datayBox.toPlainText().split(',')));
+        sizex = np.ptp(xdata)/10;
+        sizey = np.ptp(ydata)/10;
+        for control in self.controls:
+            control.sigRegionChangeFinished.disconnect()
+            self.p1.removeItem(control);
+        self.controls=[];
+        for ii in range(len(xdata)):
+            self.addControl();
+            #self.controls.append(pg.ROI([xdata[ii],ydata[ii]], size=pg.Point(sizex,sizey)));
+            self.controls[-1].setPos([xdata[ii],ydata[ii]])
+            self.controls[-1].setSize(pg.Point(sizex,sizey));
+
+    def updateTable(self):
+        print('updating table')
+        xtext = ', '.join("%.5e"%x for x in self.xsort)
+        ytext = ', '.join("%.5e"%y for y in self.ysort)
+        self.dataxBox.setText(xtext)
+        self.datayBox.setText(ytext)
+
+    def transformAxes(self):
+        xfactor = float(self.xtransform.text())
+        yfactor = float(self.ytransform.text())
+        for control in self.controls:
+            control.setPos(control.pos()[0]*xfactor, control.pos()[1]*yfactor)
+        print('Factors:%f, %f'%(xfactor,yfactor))
+        self.rePlot()
+
+    def addControl(self):
+        self.yrange = (self.p1.getAxis('left').range); #get yrange
+        self.xrange = (self.p1.getAxis('bottom').range) #get xrange
+        self.controls.append(pg.ROI([self.xrange[0]+0.9*np.ptp(self.xrange),
+                                     self.yrange[0]+0.9*np.ptp(self.yrange)],
+                               size=pg.Point(0.05*np.ptp(self.xrange),np.ptp(self.yrange)*0.05)));
+        self.p1.addItem(self.controls[-1])
+        self.controls[-1].sigRegionChangeFinished.connect(lambda:self.rePlot());
+
+
+    def getControls(self):
+        self.p1.findChildren(pg.graphicsItems.ROI)
+
+    def rePlot(self):
+        print('replotting')
+        try:
+            self.p1.clearPlots();self.p2.clearPlots();        #clear all plots
+            x=[];y=[];
+            for control in self.controls:
+                x= np.append(x, control.pos()[0]);
+                y= np.append(y, control.pos()[1]);
+            self.xsort=x[np.argsort(x)];
+            self.ysort=y[np.argsort(x)];
+            self.updateTable();
+            if len(self.controls)<2:
+                return;
+            if self.btn_cload.isChecked():
+                self.btn_load.animateClick();
+            #xplot = np.linspace(self.xsort[0],self.xsort[-1], num=self.datanum)
+            xplot = np.arange(self.xsort[0],self.xsort[-1],step=1./self.srate);
+            finterp = interp.interp1d(self.xsort,self.ysort,kind='linear')
+            #(fknots),_,_,_ = interp.splrep(xsort,ysort)
+            #finterp = interp.splev(xplot,fknots)
+            yplot=finterp(xplot)
+            self.p1.plot(xplot,yplot,symbol='o',pen='b',symbolSize=2,pxMode=True);   #plot drawn waveform
+    #        p2.plot(time2-time2[0],ramp_0); #plot input ra,p
+    #        p2.plot(time,pulse_0,pen='y') #Plot impulse resp (not normlized).
+    #        ramp_resp_n1 = ramp_resp_0*np.ptp(ramp_0)/np.ptp(ramp_resp_0); #Normalize amplitudes
+    #        p2.plot(time2-time2[0],ramp_resp_n1*ramp_0[-1]/ramp_resp_n1[-1],pen='c'); #Plot with normalized last pt.
+    #        yplot2 = signal.convolve(impulse_resp/sum(impulse_resp),yplot); #Convolve drawn wfm with norm. imp. response
+    #        p2.plot(xplot,yplot2[:len(yplot2)-len(pulse_0)+1],pen='b') #Plot convolved drawn wfm
+            #Resize control points
+            plotyrange = np.ptp(self.p1.getAxis('left').range); #get yrange
+            plotxrange = np.ptp(self.p1.getAxis('bottom').range) #get xrange
+            for control in self.controls:
+                control.sigRegionChangeFinished.disconnect()
+                control.setSize(pg.Point(plotxrange*0.05,plotyrange*0.05))
+                control.sigRegionChangeFinished.connect(lambda:self.rePlot())
+        except: raise
+
+
+
 class WFM(QMainWindow):
-    
+
     def __init__(self):
         super(WFM, self).__init__()
-        
+
         self.conBool=False
         self.initUI()
-        self.textbox.setText('dl0.00015 rm45000000 er1e4,0.01 cs500,1,1');
+        self.textbox.setText('dl0.00015 rm45000000 er1e4,0.001 cs500,1,1');
         self.amp.setText('0 1 2 1');self.amp.reset_my_color()
         self.off.setText('0');self.off.reset_my_color()
         self.totalpp=0
@@ -65,18 +222,20 @@ class WFM(QMainWindow):
         self.deltime.setText('0');self.deltime.reset_my_color()
         self.ttime.setText('0.1');self.ttime.reset_my_color()
 
-    def initUI(self):      
-        self.main_frame =QWidget()
-        ## Create the mpl Figure and FigCanvas objects. 
+    def initUI(self):
+        main_frame =QWidget()
+        ## Create the mpl Figure and FigCanvas objects.
         self.dpi = 100
         self.fig = Figure((5.0, 4.0), dpi=self.dpi)
         self.canvas = FigureCanvas(self.fig)
-        self.canvas.setParent(self.main_frame)
+        self.canvas.setParent(main_frame)
         ## Add new subplot to figure, which will be changed
         self.axes = self.fig.add_subplot(111)
         ## Create the navigation toolbar, tied to the canvas
-        self.mpl_toolbar = NavigationToolbar(self.canvas, self.main_frame)
-        
+        self.mpl_toolbar = NavigationToolbar(self.canvas, main_frame)
+        #Create the PyQtGraph Builder Widget
+        self.builder = pyqtBuilder()
+        #Create other widgets
         self.textbox = color_QLineEdit()
         self.amp = color_QLineEdit()
         self.amplbl = QLabel("Total Amp: _Vpp",self)
@@ -84,20 +243,17 @@ class WFM(QMainWindow):
         self.sratelbl = QLabel("SampleRate (Sa/s)",self)
         self.off = color_QLineEdit()
         self.offlbl = QLabel("offset (V)",self)
-        
         self.lbl = QLabel("Alt. ramp(V/s), delay(s)",self)
         self.lbl2 = QLabel("Amp. step (V)", self)
         self.errlbl = QLabel('Error Display')
         self.errlbl.setStyleSheet('color: red')
-#        self.errlbl.font(QFont.Bold())
         self.ch = QComboBox(self)
-        self.ch.addItems(("1","2"));self.ch.setCurrentIndex(0)
+        self.ch.addItems(("1","2"));
         self.chlbl = QLabel("CH:", self)
         self.filter = QComboBox(self)
-        self.filter.addItems(("Step","Normal","OFF"))
+        self.filter.addItems(("Step","Normal","OFF"));
         self.filterlbl = QLabel("Filter:", self)
-        self.rstbox = QCheckBox()
-        self.rstlbl = QLabel("Reset Instr.",self)
+        self.rstbox = QPushButton("Reset Instr.")
         self.output = QCheckBox()
         self.outputlbl = QLabel("Output On/Off", self)
         self.sync = QCheckBox()
@@ -126,29 +282,40 @@ class WFM(QMainWindow):
         self.connect(self.gpibInst, SIGNAL('currentIndexChanged(QString)'),self.gpibConnect)
         self.connect(self.textbox, SIGNAL('returnPressed()'), self.onChanged)
         self.connect(self.srate, SIGNAL('returnPressed()'), self.onChanged)
-        self.connect(self.amp, SIGNAL('returnPressed()'), self.onChanged)        
+        self.connect(self.amp, SIGNAL('returnPressed()'), self.onChanged)
         self.connect(self.off, SIGNAL('returnPressed()'), self.onChanged)
         self.connect(self.filter, SIGNAL('currentIndexChanged(QString)'), self.onChanged)
         self.connect(self.term, SIGNAL('returnPressed()'), self.termChanged)
         self.connect(self.output, SIGNAL('stateChanged(int)'),self.outputChanged)
-        self.connect(self.rstbox, SIGNAL('stateChanged(int)'),self.resetChanged)
         self.connect(self.sync, SIGNAL('stateChanged(int)'),self.syncChanged)
         self.connect(self.ch, SIGNAL('currentIndexChanged(QString)'),self.chChanged)
         self.connect(self.deltime, SIGNAL('returnPressed()'), self.textbox.change_my_color)
         self.connect(self.ttime, SIGNAL('returnPressed()'), self.textbox.change_my_color)
+        self.rstbox.clicked.connect(self.resetChanged)
+        self.builder.btn_load.clicked.connect(self.onChanged)
         ## Write to main window properties
         self.setGeometry(300, 300, 800, 500) #x,y,w,h
         self.setWindowTitle('33500B WFM Arb.Wfm Generator')
         self.show()
-        
-        ## Layout widgets on screen
-        hbox = QHBoxLayout()
-        for w in [self.lbl, self.textbox, self.chlbl, self.ch, self.rstlbl, self.rstbox, self.gpibInst]:
-            hbox.addWidget(w)
-            hbox.setAlignment(w, Qt.AlignVCenter)
+
+        ### Layout widgets on screen
+        hboxa = QHBoxLayout()
+        for w in [self.lbl, self.textbox]:
+            hboxa.addWidget(w)
+            hboxa.setAlignment(w, Qt.AlignVCenter)
+        hboxb = QHBoxLayout()
+        for w in [self.lbl2, self.amp]:
+            hboxb.addWidget(w)
+            hboxb.setAlignment(w, Qt.AlignVCenter)
+        hbox1 = QHBoxLayout()
+        for w in [self.chlbl, self.ch,
+                  self.rstbox, self.gpibInst]:
+            hbox1.addWidget(w)
+            hbox1.setAlignment(w, Qt.AlignVCenter)
         hbox2 = QHBoxLayout()
-        for w in [self.lbl2, self.amp, self.synclbl, self.sync, self.deltimelbl, self.deltime, 
-                  self.ttimelbl, self.ttime, self.filterlbl, self.filter, self.errlbl]:
+        for w in [self.synclbl, self.sync,
+                  self.deltimelbl, self.deltime,self.ttimelbl,
+                  self.ttime, self.filterlbl, self.filter, self.errlbl]:
             hbox2.addWidget(w)
             hbox2.setAlignment(w, Qt.AlignVCenter)
         hbox3 = QHBoxLayout()
@@ -157,58 +324,81 @@ class WFM(QMainWindow):
                   self.outputlbl,self.output]:
             hbox3.addWidget(w)
             hbox3.setAlignment(w, Qt.AlignVCenter)
-        vbox = QVBoxLayout()
-        vbox.addWidget(self.canvas)
-        vbox.addWidget(self.mpl_toolbar)
-        vbox.addLayout(hbox)
-        vbox.addLayout(hbox2)
-        vbox.addLayout(hbox3)
-        
-        self.main_frame.setLayout(vbox)
-        self.setCentralWidget(self.main_frame)
-        self.show()
-        
+        #Main box
+        mainWindow = QWidget();
+        gridLayout = QGridLayout();
+        self.tabWidget = QTabWidget();
+        #Inner1, Tab boxes
+        tab1Widget = QWidget();
+        tab2Widget = QWidget();
+        tab1Layout = QVBoxLayout();
+        tab2Layout = QVBoxLayout();
+        #Inner2, ControlBox
+        cntLayout = QVBoxLayout()
+        cntLayout.addLayout(hbox1)
+        cntLayout.addLayout(hbox2)
+        cntLayout.addLayout(hbox3)
+        #AddWidgets and Layout
+        tab1Layout.addWidget(self.canvas)
+        tab1Layout.addWidget(self.mpl_toolbar)
+        tab1Layout.addLayout(hboxa)
+        tab1Layout.addLayout(hboxb)
+        tab2Layout.addWidget(self.builder)
+        gridLayout.addWidget(self.tabWidget,0,0)
+        gridLayout.addLayout(cntLayout,1,0)
+        self.tabWidget.addTab(tab1Widget, "Main");
+        self.tabWidget.addTab(tab2Widget, "Custom")
+        #Set Layout Children
+        tab1Widget.setLayout(tab1Layout)
+        tab2Widget.setLayout(tab2Layout)
+        mainWindow.setLayout(gridLayout)
+        self.setCentralWidget(mainWindow)
+        #self.show()
+
     def fftWFM(self):
         d=1.0/float(self.srate.text())
         hs=np.fft.fft(self.datay)
         fs=np.fft.fftfreq(int(len(self.datax)),d)
         return fs, hs
-        
+
     ## Define Changed Functions
     def onChanged(self):
-        string = unicode(self.textbox.text()).split()
-        ampString = unicode(self.amp.text()).split() #convert amplitude strings        
-        if len(ampString)!=len(string):
-            self.errlbl.setText('Match length of inputs');
-        else:
-            self.errlbl.clear()
-            self.buildWFM()
-        self.plotUpdate()
-
+        ind = self.tabWidget.currentIndex();
+        if ind == 0:
+            string = unicode(self.textbox.text()).split()
+            ampString = unicode(self.amp.text()).split() #convert amplitude strings
+            if len(ampString)!=len(string):
+                self.errlbl.setText('Match length of inputs');
+            else:
+                self.errlbl.clear()
+                self.buildWFM()
+            self.plotUpdate()
+        elif ind == 1:
+            self.buildDrawing();
+            #print(self.datax,self.datay)
         self.sratelbl.setText('%s Samples, SRate: (Sa/s)' %(self.samples)) #Display new Samples
 
 #        if self.samples>65e3:
-#            self.errlbl.setText('Too long, Samples<65k');          
+#            self.errlbl.setText('Too long, Samples<65k');
 
-        if len(ampString)==len(string):
-            self.totalpp=max(self.datay)-min(self.datay) #Calc Vpp
-            self.amplbl.setText('Total Amp: %sVpp' %(self.totalpp)) #Display new Vpp
-            self.loadWFM()
-            self.termChanged()
-            self.offsetChanged()
-            self.srateChanged()
-            self.ampChanged()
-            self.filterChanged()
-            self.outputChanged()
-            #self.errlbl.setText('No Errors')
-            self.syncChanged()
+        self.totalpp=max(self.datay)-min(self.datay) #Calc Vpp
+        self.amplbl.setText('Total Amp: %sVpp' %(self.totalpp)) #Display new Vpp
+        self.loadWFM()
+        self.termChanged()
+        self.offsetChanged()
+        self.srateChanged()
+        self.ampChanged()
+        self.filterChanged()
+        self.outputChanged()
+        #self.errlbl.setText('No Errors')
+        self.syncChanged()
 
     def ampChanged(self):
         self.func_write('SOUR%s:VOLT %s; *WAI' %(self.ch.currentText(),self.totalpp)); print('Amp changed')
-        
+
     def offsetChanged(self):
         self.func_write('SOUR%s:VOLT:OFFSET %s; *WAI' %(self.ch.currentText(),self.off.text())) ;print('Offset changed')
-    
+
     def srateChanged(self):
         self.func_write('SOUR%s:FUNC:ARB:SRATE %s; *WAI' %(self.ch.currentText(),self.srate.text()));print('SRate Changed')
         realsrate = float(self.func_read('SOUR%s:FUNC:ARB:SRATE?' %self.ch.currentText()))
@@ -218,10 +408,10 @@ class WFM(QMainWindow):
             redpalette.setColor(self.backgroundRole(), QColor('white'))
             redpalette.setColor(self.foregroundRole(), QColor('red'))
             self.srate.setPalette(redpalette)
-        
+
     def filterChanged(self):
         self.func_write('SOUR%s:FUNC:ARB:FILTER %s; *WAI' %(self.ch.currentText(),self.filter.currentText()));print('Filter Changed')
-        
+
     def termChanged(self):
         self.errlbl.clear()
         if self.term.text()=='INF':
@@ -236,37 +426,37 @@ class WFM(QMainWindow):
         else:
             self.errlbl.setText('Incorrect Termination')
         #print('%.1f' %self.func_read('OUTP:LOAD?'))
-    
+
     def outputChanged(self, state=0):
         if self.output.isChecked():
             self.func_write('OUTPUT%s ON; *WAI' %self.ch.currentText())
         else:
             self.func_write('OUTPUT%s OFF; *WAI' %self.ch.currentText())
-            
-    def resetChanged(self, state=0):            
-        if self.rstbox.isChecked():
-            self.inst.write('*RST; *WAI') #reset instrument
-            self.inst.write('*CLS; *WAI') #clear instrument
-            self.rstbox.setChecked(0)
-            self.textbox.change_my_color()
-            
+
+    def resetChanged(self):
+        #if self.rstbox.isChecked():
+        self.func_write('*RST; *WAI') #reset instrument
+        self.func_write('*CLS; *WAI') #clear instrument
+        #self.rstbox.setChecked(0)
+        #self.textbox.change_my_color()
+
     def plotUpdate(self):
         #Update plots
         self.axes.clear()
         self.axes.plot(self.datax,float(self.off.text())+self.datay,'.-') #plot data
-#        self.lbl.setText(string) 
+#        self.lbl.setText(string)
         self.canvas.draw() #update drawing
-        
+
     def loadWFM(self):
         #Upload waveform and settings
         ch=int(self.ch.currentText())
         name='test%s' %ch
         print('Samples=%s' %len(self.datay))
         datasend=self.datay/(max(abs(self.datay)))
-        
+
         #turn off output when updating
         self.func_write('OUTPUT%s OFF; *WAI' %self.ch.currentText())
-            
+
         self.func_write('FORMAT:BORDER SWAPPED') #binary data format, little endian (LSB first)
         self.func_write('SOUR%s:DATA:VOLatile:CLEar; *WAI' %self.ch.currentText())
         self.inst.write_binary_values(u'SOUR%s:DATA:ARB ' %self.ch.currentText() +name+', ', datasend, datatype='f') #https://docs.python.org/2/library/struct.html
@@ -281,16 +471,16 @@ class WFM(QMainWindow):
         self.func_write('*WAI');print('WFM Loading')   #Make sure no other commands are exectued until arb is done downloadin
         self.func_write('SOUR%s:FUNC ARB' %self.ch.currentText()) #Set to arb. waveform output
         self.func_write('SOUR%s:FUNC:ARB ' %self.ch.currentText() + name ) #use waveform in memory
-        
+
         if self.sync.isChecked():
             self.func_write('*WAI;SOUR%s:FUNC:ARB:SYNC' %self.ch.currentText())
         print('WFM Loaded')
         #turn output back to correct state
         self.outputChanged()
-        
+
     def chChanged(self):
         self.func_write('DISP:FOCUS CH%s; *WAI' %self.ch.currentText()); print('Channel changed')
-        
+
         if self.textstor==['0','1']:
             load=0; #print('no loading of data')
         else:
@@ -320,7 +510,6 @@ class WFM(QMainWindow):
             self.buildWFM()
             self.plotUpdate()
 
-        
 #        self.textbox.setText(self.textstor[ch])
 
     def syncChanged(self, state=0):
@@ -331,9 +520,17 @@ class WFM(QMainWindow):
         elif ~self.sync.isChecked():
             print('ArbSync Not On')
 #        self.onChanged();
-            
-            
+
     ##Arb WFM functions
+    def buildDrawing(self):
+        self.datax=[];
+        srate=float(self.srate.text()) #Read sample rate
+        finterp = interp.interp1d(self.builder.xsort,self.builder.ysort,kind='linear')
+        self.datax = np.arange(self.builder.xsort[0],self.builder.xsort[-1],step=1./srate)
+        self.datay = finterp(self.datax)
+        self.samples = len(self.datay);
+        self.builder.srate = srate;
+
     def buildWFM(self):
         wfm=np.zeros(0)
         stor=np.zeros(0)
@@ -344,8 +541,8 @@ class WFM(QMainWindow):
         pi = np.pi
 #        amp1=map(float,ampString) #map amplitude data to numbers
 #        fdata = map(float, fstring)
-        
-        
+
+
         for i in range(len(fstring)):
             func = fstring[i][:2]; #read first 2 strings for func
             data = map(float,fstring[i][2:].split(',')); #read remainder for constant
@@ -375,9 +572,9 @@ class WFM(QMainWindow):
                 x=np.linspace(0,data[2],num=samp)
                 stor=-amp1[0]*np.exp(-data[0]*x) - amp1[1]*np.exp(-data[1]*x) + aptr + (amp1[0]+amp1[1]);
                 aptr=stor[-1]
-            elif func == 'cs': 
+            elif func == 'cs':
             #cosine, f(freq, thetastart/pi, thetatotal/pi) = A*cosine(2pi*freq + pi*theta)
-                if len(data)!=3: 
+                if len(data)!=3:
                     print('Cosine needs 3 inputs (E.g.: cs500,0,1/2)'); continue;
                 ttotal = (data[2])/(2*data[0])
                 samp=abs(int(srate*ttotal))
@@ -394,8 +591,8 @@ class WFM(QMainWindow):
             ch_new=int(self.ch.currentText())-1;
             ch_old=int(not(ch_new));
             for n in [1,2]:
-                self.func_write('SOUR%s:BURS:STAT OFF' %n) #Turn off burst mode to setup settings          
-                self.func_write('SOUR%s:BURST:MODE TRIG; *WAI' %n)      
+                self.func_write('SOUR%s:BURS:STAT OFF' %n) #Turn off burst mode to setup settings
+                self.func_write('SOUR%s:BURST:MODE TRIG; *WAI' %n)
                 self.func_write('SOUR%s:BURST:NCYC 1' %n)
                 self.func_write('TRIG%s:SOUR TIM' %n)
                 self.func_write('TRIG%s:TIM %s' %(n,self.ttime.text()) )
@@ -403,11 +600,11 @@ class WFM(QMainWindow):
                     self.func_write('TRIG%s:DELAY %s' %(n,self.delstor[n-1]))
                 elif n==ch_new+1:
                     self.func_write('TRIG%s:DELAY %s' %(n,self.deltime.text()))
-                self.func_write('SOUR%s:BURS:STAT ON' %n) #Turn on burst mode after all other settings          
+                self.func_write('SOUR%s:BURS:STAT ON' %n) #Turn on burst mode after all other settings
         self.samples=len(wfm)
         self.datay=wfm
         self.datax=np.arange(len(wfm))/srate
-                    
+
     ## GPIB Functions
     def func_write(self,func):
         if self.conBool:
@@ -415,13 +612,13 @@ class WFM(QMainWindow):
             self.sb=int(self.inst.query('*STB?'));
             self.err=self.inst.query('SYST:ERR?')
             if self.sb==4:
-                self.inst.write('*CLS')
+                self.func_write('*CLS')
                 self.errlbl.setText(str(self.err))
                 print(str(self.err))
         else:
             print('not connected')
         QApplication.processEvents()
-        
+
     def func_read(self,func):
         if self.conBool:
             result=self.inst.query(func)
@@ -431,43 +628,39 @@ class WFM(QMainWindow):
     def gpibDisconnect(self):
         self.inst.close()
         self.outputChanged(2) #turn off
-        
-    def gpibConnect(self,address):    
-        rm = visa.ResourceManager()
+
+    def gpibConnect(self,address):
+        rm = ResourceManager()
         print(address)
         self.inst = rm.open_resource(str(address))
         print(self.inst.query('*IDN?'))
-        if self.rstbox.checkState() ==2:
-            self.inst.write('*RST; *WAI') #reset instrument
-            self.inst.write('*CLS; *WAI') #clear instrument
         self.conBool=True
         self.inst.chunck_size = pow(2,20)
         self.inst.timeout = 10000;
-        
+
     def gpibFind(self):
-        rm = visa.ResourceManager()
+        rm = ResourceManager()
         devices=rm.list_resources()
         return devices
 
-
+### Main loop
 def main():
-    
-    app = QtGui.QApplication(sys.argv)
+    app = QApplication(sys.argv)
     form = WFM()
     form.show()
     sys.exit(app.exec_())
-    app.exec_()
-    
+
 if __name__ == "__main__":
     main()
 
-#app = QtGui.QApplication(sys.argv)
-#form = WFM()
-#form.show()
-#self=form
-## Troubleshooting
+## Standalone Run in Spyder
+app = QApplication(sys.argv)
+form = WFM()
+form.show()
+self=form
+
+### Troubleshooting
 #    print(form.gpibFind())
 #    x=form.gpibFind()
 #    fgen=form.gpibConnect('USB0::0x0957::0x2C07::MY52814470::INSTR')
 #    form.func_write('FUNC TRI')
-    
