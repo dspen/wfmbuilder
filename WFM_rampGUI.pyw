@@ -654,10 +654,10 @@ if __name__ == "__main__":
     main()
 
 ## Standalone Run in Spyder
-app = QApplication(sys.argv)
-form = WFM()
-form.show()
-self=form
+#app = QApplication(sys.argv)
+#form = WFM()
+#form.show()
+#self=form
 
 ### Troubleshooting
 #    print(form.gpibFind())
