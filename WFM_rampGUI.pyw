@@ -33,7 +33,7 @@ from matplotlib.figure import Figure
 import pyqtgraph as pg
 import scipy.interpolate as interp
 
-__version__ = '3.0.0-b1'
+__version__ = '3.0.1-b1'
 class color_QLineEdit(QLineEdit):
 
     def __init__(self):
@@ -131,13 +131,17 @@ class pyqtBuilder(QWidget):
         sizey = np.ptp(ydata)/10;
         for control in self.controls:
             control.sigRegionChangeFinished.disconnect()
+            #print('updateGraphdisconnect')
             self.p1.removeItem(control);
         self.controls=[];
         for ii in range(len(xdata)):
             self.addControl();
             #self.controls.append(pg.ROI([xdata[ii],ydata[ii]], size=pg.Point(sizex,sizey)));
+            self.controls[-1].sigRegionChangeFinished.disconnect();
             self.controls[-1].setPos([xdata[ii],ydata[ii]])
             self.controls[-1].setSize(pg.Point(sizex,sizey));
+            self.controls[-1].sigRegionChangeFinished.connect(lambda:self.rePlot());
+
 
     def updateTable(self):
         print('updating table')
@@ -150,7 +154,9 @@ class pyqtBuilder(QWidget):
         xfactor = float(self.xtransform.text())
         yfactor = float(self.ytransform.text())
         for control in self.controls:
+            control.sigRegionChangeFinished.disconnect();
             control.setPos(control.pos()[0]*xfactor, control.pos()[1]*yfactor)
+            control.sigRegionChangeFinished.connect(lambda:self.rePlot());
         print('Factors:%f, %f'%(xfactor,yfactor))
         self.rePlot()
 
@@ -199,7 +205,8 @@ class pyqtBuilder(QWidget):
             plotyrange = np.ptp(self.p1.getAxis('left').range); #get yrange
             plotxrange = np.ptp(self.p1.getAxis('bottom').range) #get xrange
             for control in self.controls:
-                control.sigRegionChangeFinished.disconnect()
+                control.sigRegionChangeFinished.disconnect();
+                #print('rePlotdisconnect')
                 control.setSize(pg.Point(plotxrange*0.05,plotyrange*0.05))
                 control.sigRegionChangeFinished.connect(lambda:self.rePlot())
         except: raise
@@ -530,6 +537,7 @@ class WFM(QMainWindow):
         self.datay = finterp(self.datax)
         self.samples = len(self.datay);
         self.builder.srate = srate;
+        print('replot line')
 
     def buildWFM(self):
         wfm=np.zeros(0)
