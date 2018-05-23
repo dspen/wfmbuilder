@@ -13,6 +13,7 @@ v2.1) added 2 string qualifier to each function builder. rm1, dl1, er1,2
 v2.1.3) add cosine function qualifier, cs500,1,1
 v2.2) Major new addition, tabbed version layout, and custom function drawing in tab2
 v3.0.0) Add new tab to draw wfm, requires pyQtGraph and scipy.interpolate install
+v3.0.2) Pyqt performance improv., add "mr" for aritray number of exp. ramps
 
 TO DO) Add FFT plot functionality (with calculation time restrictions)
 @author: Daryl Spencer
@@ -33,7 +34,7 @@ from matplotlib.figure import Figure
 import pyqtgraph as pg
 import scipy.interpolate as interp
 
-__version__ = '3.0.1-b1'
+__version__ = '3.0.2-b1'
 class color_QLineEdit(QLineEdit):
 
     def __init__(self):
@@ -141,7 +142,7 @@ class pyqtBuilder(QWidget):
             self.controls[-1].setPos([xdata[ii],ydata[ii]])
             self.controls[-1].setSize(pg.Point(sizex,sizey));
             self.controls[-1].sigRegionChangeFinished.connect(lambda:self.rePlot());
-
+        self.rePlot()
 
     def updateTable(self):
         print('updating table')
@@ -580,6 +581,15 @@ class WFM(QMainWindow):
                 x=np.linspace(0,data[2],num=samp)
                 stor=-amp1[0]*np.exp(-data[0]*x) - amp1[1]*np.exp(-data[1]*x) + aptr + (amp1[0]+amp1[1]);
                 aptr=stor[-1]
+            elif func == 'mr': #multiple exp. rise, f(t1,t2...,tn,total)=A1*exp(t1)+A2*exp(t2)+...+An*exp(tn)
+                if (len(data)-1) != len(amp1): print('Match args of multi-exp.'); continue;
+                samp=abs(int(srate*data[-1]))                
+                x=np.linspace(0,data[-1],num=samp)
+                stor=np.zeros(samp);
+                for ii in range(len(data)-1):
+                    stor=stor -amp1[ii]*np.exp(-data[ii]*x);
+                stor = stor + np.sum(amp1[:]) + aptr
+                aptr = stor[-1]
             elif func == 'cs':
             #cosine, f(freq, thetastart/pi, thetatotal/pi) = A*cosine(2pi*freq + pi*theta)
                 if len(data)!=3:
